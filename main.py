@@ -1,91 +1,66 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+import os
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 from modules import weather_api, user_data, scheduler
 
-BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN_HERE"
+ASK_CITY_WEATHER, ASK_CITY_REPORT = range(2)
 
-# Kullanım kılavuzu metni
-def get_help_text():
-    return (
-        "Merhaba! Ben bir Hava Durumu Botuyum.
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    reply_markup = ReplyKeyboardMarkup(
+        [["Anlık Hava Durumu"], ["Günlük Rapor Al"]],
+        resize_keyboard=True
+    )
+    await update.message.reply_text(
+        """Merhaba! Ben bir Hava Durumu Botuyum.
+- "Anlık Hava Durumu": Şehrini gir, anında bilgileri al.
+- "Günlük Rapor Al": Şehrini kaydet, her sabah hava durumu mesajı al.
 
-"
-        "Butonları kullanarak aşağıdaki işlemleri yapabilirsin:
-"
-        "- Anlık hava durumunu öğren
-"
-        "- Günlük hava raporlarını al
-"
-        "- Konumunu kaydet
-
-"
-        "Başlamak için aşağıdaki butonları kullan."
+Bir seçim yap lütfen:""",
+        reply_markup=reply_markup
     )
 
-# /start komutu
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("Anlık Hava Durumu", callback_data="current_weather")],
-        [InlineKeyboardButton("Günlük Rapor Al", callback_data="daily_report")],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(get_help_text(), reply_markup=reply_markup)
-
-# Callback buton işleyici
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if query.data == "current_weather":
-        await query.edit_message_text("Lütfen şehir adını yaz (örnek: İstanbul):")
-        context.user_data["awaiting_location"] = "current_weather"
-
-    elif query.data == "daily_report":
-        await query.edit_message_text("Günlük rapor için şehir gir (örnek: Ankara):")
-        context.user_data["awaiting_location"] = "daily_report"
-
-# Kullanıcının mesajlarını ele al (örneğin şehir adı)
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_input = update.message.text
-    intent = context.user_data.get("awaiting_location")
+    text = update.message.text.lower()
+    if text == "anlık hava durumu":
+        await update.message.reply_text("Lütfen hava durumunu öğrenmek istediğiniz şehri yazınız:")
+        return ASK_CITY_WEATHER
+    elif text == "günlük rapor al":
+        await update.message.reply_text("Günlük rapor almak için lütfen şehrinizi yazınız:")
+        return ASK_CITY_REPORT
+    else:
+        await update.message.reply_text("Lütfen geçerli bir seçim yapınız.")
+        return ConversationHandler.END
 
-    if intent == "current_weather":
-        weather = weather_api.get_current_weather(user_input)
-        await update.message.reply_text(weather)
-        context.user_data["awaiting_location"] = None
+async def receive_city_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    city = update.message.text
+    weather = weather_api.get_current_weather(city)
+    await update.message.reply_text(weather)
+    return ConversationHandler.END
 
-    elif intent == "daily_report":
-        user_id = str(update.effective_user.id)
-        user_data.save_user_location(user_id, user_input)
-        await update.message.reply_text(f"{user_input} için günlük hava raporları gönderilecek.")
-        context.user_data["awaiting_location"] = None
-
-# Botu başlat
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(CommandHandler("help", start))
-    app.add_handler(CommandHandler("weather", start))
-    app.add_handler(CommandHandler("forecast", start))
-    app.add_handler(CommandHandler("setlocation", start))
-    app.add_handler(CommandHandler("getlocation", start))
-    app.add_handler(CommandHandler("removelocation", start))
-    app.add_handler(CommandHandler("commands", start))
-    app.add_handler(CommandHandler("menu", start))
-    app.add_handler(CommandHandler("reset", start))
-    app.add_handler(CommandHandler("guide", start))
-    app.add_handler(CommandHandler("usage", start))
-    app.add_handler(CommandHandler("buttons", start))
-    app.add_handler(CommandHandler("options", start))
-
-    from telegram.ext import MessageHandler, filters
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    scheduler.setup_scheduler(app)  # Otomatik bildirim zamanlayıcısı
-    print("Bot çalışıyor...")
-    app.run_polling()
+async def receive_city_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    city = update.message.text
+    user_id = str(update.message.from_user.id)
+    user_data.save_user_location(user_id, city)
+    await update.message.reply_text(f"{city} kaydedildi. Artık her sabah bu şehir için hava durumu alacaksınız.")
+    return ConversationHandler.END
 
 if __name__ == "__main__":
-    main()
+    BOT_TOKEN = os.getenv("BOT_TOKEN")
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    conv_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)],
+        states={
+            ASK_CITY_WEATHER: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_city_weather)],
+            ASK_CITY_REPORT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_city_report)],
+        },
+        fallbacks=[]
+    )
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(conv_handler)
+
+    scheduler.setup_scheduler(app)
+
+    print("Bot başlatılıyor...")
+    app.run_polling()
