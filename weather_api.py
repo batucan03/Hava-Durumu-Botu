@@ -1,6 +1,7 @@
+import os
 import requests
 
-API_KEY = "60fc94395ee96a8e52e8cf92f25f4e1d"
+API_KEY = os.getenv("WEATHER_API_KEY")
 BASE_URL = "https://api.openweathermap.org/data/2.5/weather"
 
 def get_current_weather(city):
@@ -34,4 +35,3 @@ def get_current_weather(city):
         )
     except Exception as e:
         return f"Hata oluştu: {str(e)}"
-
